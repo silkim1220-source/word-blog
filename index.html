@@ -141,6 +141,8 @@ dialog::backdrop{background:rgba(15,22,35,.55)}
 .toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%) translateY(20px);background:#1d2433;color:#fff;padding:11px 18px;border-radius:12px;font-size:14px;opacity:0;transition:.25s;z-index:99;max-width:92vw;text-align:center;pointer-events:none}
 .toast.on{opacity:1;transform:translateX(-50%) translateY(0)}
 .foot{max-width:1000px;margin:30px auto 0;padding:0 16px 30px;font-size:12px;color:var(--mute);text-align:center;line-height:1.7}
+.inapp{background:#fff4de;border-bottom:1px solid #edd3a1;padding:12px 16px;font-size:14px;color:#5b3d0a;line-height:1.6}
+.inapp .row{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap}
 [hidden]{display:none!important}
 @media (max-width:640px){
  .steps{grid-template-columns:repeat(2,1fr)}
@@ -157,10 +159,13 @@ dialog::backdrop{background:rgba(15,22,35,.55)}
 <header class="top"><div class="nav">
  <a class="brand" href="./"><img src="icon-192.png" alt=""><span>말씀 블로그<span class="t2"> 스튜디오</span></span></a>
  <span class="sp"></span>
+ <button class="chip" id="installBtn" type="button" hidden>앱 설치</button>
+ <button class="chip" id="openBtn" type="button">다른 기기에서 열기</button>
  <button class="chip" id="libBtn" type="button">보관함</button>
  <button class="chip" id="connBtn" type="button">AI 연결하기</button>
 </div></header>
 
+<div class="inapp" id="inappBar" hidden><b>앱 안의 브라우저에서 열렸어요.</b> 복사·사진 저장이 안 될 수 있어요. <span id="inappHow"></span><div class="row"><button class="sbtn pri" id="inappGo" type="button">외부 브라우저로 열기</button><button class="sbtn" id="inappCopy" type="button">링크 복사</button></div></div>
 <main>
 <section class="hero">
  <h1>구절 하나로,<br><em>홈판에 오르는</em> 묵상 글 한 편</h1>
@@ -244,6 +249,13 @@ dialog::backdrop{background:rgba(15,22,35,.55)}
  <div class="row"><button class="sbtn" id="libClose" type="button">닫기</button></div>
 </div></dialog>
 
+<dialog id="openDlg"><div class="dlg">
+ <h3>다른 기기·브라우저에서 열기</h3>
+ <p>휴대폰 카메라로 QR을 찍거나, 링크를 복사해 크롬·사파리·엣지에 붙여 넣으세요. 처음 여는 브라우저에서는 ‘AI 연결’을 한 번 승인해 주세요.</p>
+ <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap"><img id="qrImg" alt="앱 주소 QR 코드" width="180" height="180" style="border-radius:12px;border:1px solid var(--line);background:#fff"><div style="flex:1;min-width:200px"><input id="appUrl" readonly style="width:100%;padding:10px;border:1px solid var(--line);border-radius:10px;font-size:14px"><div class="row"><button class="sbtn pri" id="copyUrl" type="button">링크 복사</button><button class="sbtn" id="shareUrl" type="button" hidden>공유하기</button><a class="sbtn" id="newWin" href="./" target="_blank" rel="noopener" style="text-decoration:none">새 창으로 열기</a></div></div></div>
+ <p class="wait" id="installHint"></p>
+ <div class="row"><button class="sbtn" id="openClose" type="button">닫기</button></div>
+</div></dialog>
 <div class="toast" id="toast"></div>
 
 <script>
@@ -635,6 +647,36 @@ $$('[data-cmd]').forEach(b=>b.addEventListener('click',()=>{const c=b.dataset.cm
  if(c==='copyRich')copyRich();else if(c==='copyText')copyText();else if(c==='zip')saveZip();else if(c==='share')sharePhotos();
  else if(c==='new'){window.scrollTo({top:0,behavior:'smooth'});$('#refInput').select()}}));
 try{const tf=new File([new Blob(['x'],{type:'image/jpeg'})],'a.jpg',{type:'image/jpeg'});if(navigator.canShare&&navigator.canShare({files:[tf]})&&/Android|iPhone|iPad/i.test(navigator.userAgent))$('#shareBtn').hidden=false}catch(e){}
+
+/* ========== 외부 브라우저로 열기 ========== */
+const APP_URL='https://silkim1220-source.github.io/word-blog/';
+const UA=navigator.userAgent||'';const IS_AND=/Android/i.test(UA),IS_IOS=/iPhone|iPad|iPod/i.test(UA)||(/Macintosh/.test(UA)&&navigator.maxTouchPoints>1);
+const IS_KAKAO=/KAKAOTALK/i.test(UA);
+const IN_APP=IS_KAKAO||/NAVER\(inapp|; NAVER|Instagram|FBAN|FBAV|FB_IAB|FBIOS|Line\/|DaumApps|DaumDevice|BAND\/|everytimeApp|Twitter|TikTok|musical_ly|Snapchat|; wv\)/i.test(UA);
+function cleanUrl(){const u=new URL(location.href);u.searchParams.delete('ext');u.searchParams.delete('v');return u.href}
+function goExternal(){const url=cleanUrl();
+ if(IS_KAKAO){location.href='kakaotalk://web/openExternal?url='+encodeURIComponent(url);return true}
+ if(IS_AND){const u=new URL(url);u.searchParams.set('ext','1');location.href='intent://'+url.replace(/^https?:\/\//,'')+'#Intent;scheme=https;package=com.android.chrome;S.browser_fallback_url='+encodeURIComponent(u.href)+';end';return true}
+ return false}
+async function copyStr(t){try{await navigator.clipboard.writeText(t);toast('링크를 복사했어요.')}catch(e){fallbackCopy(t)}}
+if(IN_APP){const bar=$('#inappBar');bar.hidden=false;
+ $('#inappHow').textContent=IS_IOS?'오른쪽 아래(또는 위) ··· 또는 공유 버튼을 눌러 ‘Safari로 열기’를 선택해 주세요.':'아래 버튼을 누르면 크롬에서 열려요.';
+ $('#inappGo').hidden=IS_IOS&&!IS_KAKAO;$('#inappGo').onclick=()=>{if(!goExternal())toast('메뉴에서 ‘다른 브라우저로 열기’를 선택해 주세요.')};
+ $('#inappCopy').onclick=()=>copyStr(cleanUrl());
+ const tried=new URLSearchParams(location.search).get('ext')==='1'||sessionStorage.getItem('wb-ext')==='1';
+ if(!tried&&(IS_KAKAO||IS_AND)){sessionStorage.setItem('wb-ext','1');setTimeout(goExternal,300)}}
+let installEvt=null;
+window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();installEvt=e;$('#installBtn').hidden=false});
+window.addEventListener('appinstalled',()=>{$('#installBtn').hidden=true;toast('앱으로 설치됐어요. 홈 화면(바탕화면)에서 바로 열 수 있어요.')});
+$('#installBtn').onclick=async()=>{if(!installEvt)return;installEvt.prompt();try{await installEvt.userChoice}catch(e){}installEvt=null;$('#installBtn').hidden=true};
+const STANDALONE=matchMedia('(display-mode: standalone)').matches||navigator.standalone;
+$('#openBtn').onclick=()=>{$('#appUrl').value=APP_URL;$('#qrImg').src='https://api.qrserver.com/v1/create-qr-code/?size=360x360&margin=10&data='+encodeURIComponent(APP_URL);
+ $('#shareUrl').hidden=!navigator.share;$('#newWin').href=APP_URL;
+ $('#installHint').textContent=STANDALONE?'지금 설치된 앱으로 보고 있어요.':IS_IOS?'아이폰: Safari에서 공유 버튼 → ‘홈 화면에 추가’를 누르면 앱처럼 쓸 수 있어요.':installEvt?'위쪽 ‘앱 설치’ 버튼을 누르면 바탕화면·홈 화면에서 바로 열 수 있어요.':'크롬·엣지에서는 주소창 오른쪽의 설치 아이콘으로 앱처럼 설치할 수 있어요.';
+ $('#openDlg').showModal()};
+$('#copyUrl').onclick=()=>copyStr(APP_URL);
+$('#shareUrl').onclick=()=>navigator.share({title:'말씀 블로그',text:'성경 구절 하나로 홈판 묵상 블로그 글 만들기',url:APP_URL}).catch(()=>{});
+$('#openClose').onclick=()=>$('#openDlg').close();
 
 /* 시작 */
 loadOpts();loadToken();connUI();
