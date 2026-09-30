@@ -180,7 +180,6 @@ dialog::backdrop{background:rgba(15,22,35,.55)}
    <label>글 AI<select id="oWriter"><option value="openai/gpt-5.4-mini">고급 · GPT-5.4 Mini</option><option value="openai/gpt-5.4-nano">절약 · GPT-5.4 Nano</option></select></label>
    <label>이미지 스타일<select id="oLook"><option value="photo">감성 실사 사진</option><option value="illust">실사 일러스트</option><option value="oil">성화풍 유화</option><option value="water">수채화</option></select></label>
    <label>이미지 비율<select id="oSize"><option value="square">정사각 1:1 (블로그 기본)</option><option value="tall">세로 4:5 (모바일)</option><option value="wide">가로 16:9</option></select></label>
-   <label class="check"><input type="checkbox" id="oOverlay" checked>사진에 말씀 글씨 넣기</label>
   </div>
  </details>
  <p class="cost" id="costHint"></p>
@@ -204,10 +203,9 @@ dialog::backdrop{background:rgba(15,22,35,.55)}
    <button class="sbtn" data-cmd="copyText" type="button">글 복사 (텍스트)</button>
    <button class="sbtn" data-cmd="zip" type="button">사진 5장 한 번에 저장</button>
    <button class="sbtn" data-cmd="share" type="button" id="shareBtn" hidden>휴대폰 사진으로 보내기</button>
-   <label class="sbtn" style="display:inline-flex;gap:6px;align-items:center"><input type="checkbox" id="overlayToggle">사진에 말씀 글씨</label>
   </div>
   <div class="titles" id="titles"></div>
-  <p class="hint">제목을 눌러 고르세요. 아래 글은 직접 눌러서 고칠 수 있고, 고친 내용은 보관함에 자동 저장돼요.</p>
+  <p class="hint">사진은 글씨 없는 깨끗한 이미지이고, 말씀과 글은 모두 본문 텍스트로 들어가요. 제목을 눌러 고르세요. 아래 글은 직접 눌러서 고칠 수 있고, 고친 내용은 보관함에 자동 저장돼요.</p>
  </div>
  <article class="post" id="post" contenteditable="true" spellcheck="false"></article>
  <div class="bottomtools">
@@ -346,19 +344,24 @@ async function api(path,body,signal){
  return r}
 
 /* ========== 개역개정 불러오기 + 검증 ========== */
-async function nkrvFetch(q,from,to,signal){
+const SEARCH_FALLBACK='google/gemini-2.5-flash-lite:search';
+function versesFrom(txt){txt=String(txt||'');let arr=[];try{const j=parseJSON(txt);if(Array.isArray(j.verses))arr=j.verses;else if(Array.isArray(j))arr=j}catch(e){}
+ if(!arr.length){const re=/"verse"\s*:\s*"?(\d+)"?\s*,\s*"text"\s*:\s*"((?:[^"\\]|\\.)*)"/g;let m;while((m=re.exec(txt))){let t=m[2];try{t=JSON.parse('"'+t+'"')}catch(e){}arr.push({verse:+m[1],text:t})}}
+ return arr}
+async function nkrvFetch(q,from,to,signal,model){
  const ref=refLabel(q,from,to);
  const sys='너는 성경 본문 조회기다. 대한성서공회 「성경전서 개역개정판」(1998) 본문을 웹에서 확인하여 글자 하나 바꾸지 말고 그대로 옮긴다. 개역한글·새번역·공동번역·쉬운성경 등 다른 번역과 섞지 않는다. 요청한 절 범위를 빠짐없이 절 번호 순서대로 적는다. 소제목, 각주 기호, 출처 번호([1] 등), 설명은 넣지 않는다. JSON 객체 하나만 출력한다.';
- const r=await api('/v1/chat/completions',{model:SEARCH_MODEL,messages:[{role:'system',content:sys},{role:'user',content:`${ref} (개역개정) 본문을 {"verses":[{"verse":절번호,"text":"본문"}]} 형식으로만 답해줘.`}],stream:false},signal);
- const d=await r.json();const j=parseJSON(d.choices?.[0]?.message?.content||'');const out=new Map();
- for(const v of (Array.isArray(j.verses)?j.verses:[])){const n=+v.verse;if(n>=from&&n<=to&&typeof v.text==='string'){const t=v.text.replace(/\[\d+\]/g,'').replace(/^\s*\d+\s+/,'').replace(/\s+/g,' ').trim();if(t)out.set(n,t)}}
+ const r=await api('/v1/chat/completions',{model:model||SEARCH_MODEL,messages:[{role:'system',content:sys},{role:'user',content:`${ref} (개역개정) 본문을 {"verses":[{"verse":절번호,"text":"본문"}]} 형식으로만 답해줘.`}],stream:false},signal);
+ const d=await r.json();const out=new Map();
+ for(const v of versesFrom(d.choices?.[0]?.message?.content)){const n=+v.verse;if(n>=from&&n<=to&&typeof v.text==='string'){const t=v.text.replace(/\[\d+\]/g,'').replace(/^\s*\d+\s+/,'').replace(/\s+/g,' ').trim();if(t)out.set(n,t)}}
  return out}
-async function nkrvChecked(q,from,to,krv,signal){
+async function nkrvChecked(q,from,to,krv,signal,tries=2){
  const km=new Map(krv.map(v=>[v.verse,v.text]));const good=(n,t)=>!!t&&dice(t,km.get(n)||'')>=0.3;
- let got=new Map();
- try{got=await nkrvFetch(q,from,to,signal)}catch(e){if(e.name==='AbortError'||e.status)throw e}
- const bad=[];for(let n=from;n<=to;n++)if(!good(n,got.get(n)))bad.push(n);
- if(bad.length){try{const g2=await nkrvFetch(q,bad[0],bad[bad.length-1],signal);for(const n of bad){const t=g2.get(n);if(good(n,t))got.set(n,t)}}catch(e){if(e.name==='AbortError'||e.status)throw e}}
+ const got=new Map();const bad=()=>{const b=[];for(let n=from;n<=to;n++)if(!good(n,got.get(n)))b.push(n);return b};
+ for(let t=0;t<tries;t++){const b=bad();if(!b.length)break;
+  const model=t===tries-1&&tries>2?SEARCH_FALLBACK:SEARCH_MODEL;
+  try{const g=await nkrvFetch(q,b[0],b[b.length-1],signal,model);for(const n of b){const x=g.get(n);if(good(n,x))got.set(n,x)}}
+  catch(e){if(e.name==='AbortError'||e.status)throw e}}
  const out=[];for(let n=from;n<=to;n++){const t=got.get(n)||'';const ok=good(n,t);out.push({verse:n,text:ok?t:'',krv:km.get(n)||'',ok})}
  return out}
 async function loadPassage(q,signal){
@@ -367,16 +370,17 @@ async function loadPassage(q,signal){
  if(v1>last)throw Error(`${q.name} ${q.ch}${q.b===19?'편':'장'}은 ${last}절까지 있어요.`);
  v2=Math.min(v2,last);if(v2-v1>11){v2=v1+11;trimmed=true}
  const w1=Math.max(1,v1-3);let w2=Math.min(last,Math.max(v2+3,w1+9));if(w2-w1+1>16)w2=Math.max(v2,w1+15);
- const win=await nkrvChecked(q,w1,w2,krv,signal);
- const passage=win.filter(v=>v.verse>=v1&&v.verse<=v2);
+ const [passage,ctx]=await Promise.all([nkrvChecked(q,v1,v2,krv,signal,4),nkrvChecked(q,w1,w2,krv,signal,1).catch(e=>{if(e.name==='AbortError')throw e;return[]})]);
+ const map=new Map(ctx.map(v=>[v.verse,v]));passage.forEach(v=>map.set(v.verse,v));
+ const win=[...map.values()].sort((a,b)=>a.verse-b.verse);
  return {b:q.b,name:q.name,usfm:q.usfm,ch:q.ch,v1,v2,label:refLabel(q,v1,v2),kLabel:korLabel(q,v1,v2),passage,window:win,krvAll:krv,trimmed,flagged:passage.some(v=>!v.ok)}}
 
 /* ========== 상태 ========== */
-let opts={tone:'warm',reader:'all',length:'normal',writer:'openai/gpt-5.4-mini',look:'photo',size:'square',overlay:true};
+let opts={tone:'warm',reader:'all',length:'normal',writer:'openai/gpt-5.4-mini',look:'photo',size:'square'};
 let post=null;const store=new Map();let refCache=new Map();
 function loadOpts(){try{Object.assign(opts,JSON.parse(localStorage.getItem(OPT_KEY)||'{}'))}catch(e){}
- $('#oTone').value=opts.tone;$('#oReader').value=opts.reader;$('#oLength').value=opts.length;$('#oWriter').value=opts.writer;$('#oLook').value=opts.look;$('#oSize').value=opts.size;$('#oOverlay').checked=opts.overlay;costUI()}
-function readOpts(){opts={tone:$('#oTone').value,reader:$('#oReader').value,length:$('#oLength').value,writer:$('#oWriter').value,look:$('#oLook').value,size:$('#oSize').value,overlay:$('#oOverlay').checked};try{localStorage.setItem(OPT_KEY,JSON.stringify(opts))}catch(e){}costUI()}
+ $('#oTone').value=opts.tone;$('#oReader').value=opts.reader;$('#oLength').value=opts.length;$('#oWriter').value=opts.writer;$('#oLook').value=opts.look;$('#oSize').value=opts.size;costUI()}
+function readOpts(){opts={tone:$('#oTone').value,reader:$('#oReader').value,length:$('#oLength').value,writer:$('#oWriter').value,look:$('#oLook').value,size:$('#oSize').value};try{localStorage.setItem(OPT_KEY,JSON.stringify(opts))}catch(e){}costUI()}
 function costUI(){const w=opts.writer.includes('mini')?0.03:0.008;$('#costHint').textContent=`예상 사용량: 글 1편 약 ${(w+0.03).toFixed(2)} Pollen (개역개정 검색 약 0.008 + 글 ${w} + 이미지 5장 0.02). 사진은 한 장씩 다시 그릴 수 있어요 (장당 약 0.004).`}
 
 /* ========== 진행 표시 ========== */
@@ -418,7 +422,7 @@ async function writePost(P,o,signal){
 [images 규칙: 정확히 5개, 이 순서]
 ① 대표 사진: 본문의 핵심 장면이나 상징 ② 오늘의 말씀과 배경 ③ 신학적 해석의 상징 ④ 내 삶의 적용: 오늘을 사는 한국인의 일상 ⑤ 묵상과 기도.
 - ref: ①②③은 context_nkrv에 있는 절 중에서, ④⑤는 context_nkrv 또는 crossRefs 중에서 사진과 가장 잘 맞는 구절. 다섯 ref는 모두 서로 다른 구절이어야 한다. ①은 오늘의 본문 절. 형식 예: "${P.name} ${P.ch}:${P.v1}".
-- prompt: 영어 45~80단어. 주제, 장소, 빛, 구도, 감정을 구체적으로. 성경 시대 장면은 고대 근동의 사실적인 복장과 풍경으로, 인물은 뒷모습이나 먼 거리에서. 이때 prompt에 'ancient biblical era, no modern buildings, no city skyline, no power lines'를 넣는다. 예수님이나 하나님의 얼굴은 그리지 않고 부드러운 빛으로만 표현. 현대 장면은 한국 사람과 한국의 일상 공간. 글자·로고 금지. 사진 아래쪽 1/3은 글씨를 올릴 수 있게 단순하고 차분하게.`;
+- prompt: 영어 45~80단어. 주제, 장소, 빛, 구도, 감정을 구체적으로. 성경 시대 장면은 고대 근동의 사실적인 복장과 풍경으로, 인물은 뒷모습이나 먼 거리에서. 이때 prompt에 'ancient biblical era, no modern buildings, no city skyline, no power lines'를 넣는다. 예수님이나 하나님의 얼굴은 그리지 않고 부드러운 빛으로만 표현. 현대 장면은 한국 사람과 한국의 일상 공간. 글자·로고 금지.`;
  const krvText=P.krvAll.map(v=>`${v.verse} ${v.text}`).join('\n').slice(0,3500);
  const user={reference:P.label,korean_reference:P.kLabel,translation:'개역개정',passage_nkrv:P.passage.map(v=>`${v.verse} ${v.ok?v.text:'(개역개정 확인 필요) '+v.krv}`).join('\n'),context_nkrv:P.window.filter(v=>v.ok).map(v=>`${P.name} ${P.ch}:${v.verse} ${v.text}`).join('\n'),context_krv_reference_only:krvText,image_style:LOOKS[o.look].label};
  let lastErr;
@@ -464,7 +468,7 @@ async function resolveRefs(signal){
   P.images.push({ref:r?.label||'',verseText:r?.text||'',caption:im.caption,prompt:im.prompt,seed:seed+i*101,status:'wait',link:''})}}
 
 /* ========== 이미지 ========== */
-function fullPrompt(p){const L=LOOKS[post.opts.look].en;return L+'. '+p+'. '+L.split(',').slice(0,2).join(',')+'.'+SAFE_TAIL+(post.opts.overlay?' Keep the lower third simple and uncluttered.':'')}
+function fullPrompt(p){const L=LOOKS[post.opts.look].en;return L+'. '+p+'. '+L.split(',').slice(0,2).join(',')+'.'+SAFE_TAIL}
 async function fetchImage(prompt,seed,signal){const S=SIZES[post.opts.size];
  const url=API+'/image/'+encodeURIComponent(prompt.slice(0,1800))+'?'+new URLSearchParams({model:IMG_MODEL,width:S.w,height:S.h,seed:String(seed),nologo:'true'});
  const r=await fetch(url,{headers:{Authorization:'Bearer '+token},signal});const type=r.headers.get('content-type')||'';
@@ -476,20 +480,7 @@ function wrapLines(x,text,maxW){const words=text.split(/\s+/).filter(Boolean);co
   if(cur)lines.push(cur);if(x.measureText(w).width<=maxW){cur=w;continue}
   let part='';for(const ch of w){if(x.measureText(part+ch).width>maxW){lines.push(part);part=ch}else part+=ch}cur=part}
  if(cur)lines.push(cur);return lines}
-async function buildCard(i){const it=post.images[i],st=store.get(i);if(!st?.raw)return;
- const bmp=await createImageBitmap(st.raw);const W=bmp.width,H=bmp.height;const c=document.createElement('canvas');c.width=W;c.height=H;const x=c.getContext('2d');x.drawImage(bmp,0,0,W,H);bmp.close?.();
- if(post.opts.overlay&&it.verseText){
-  const text='“'+it.verseText+'”',S=Math.min(W,H);
-  try{await document.fonts.load(`700 40px "Gowun Batang"`,text+it.ref);await document.fonts.load(`400 30px "Gowun Batang"`,it.ref)}catch(e){}
-  let fs=Math.round(S*0.052),lines;const maxW=W*0.84,maxLines=W>H?4:6;
-  for(;;){x.font=`700 ${fs}px "Gowun Batang", serif`;lines=wrapLines(x,text,maxW);if(lines.length<=maxLines||fs<=S*0.03)break;fs=Math.round(fs*0.92)}
-  const lh=fs*1.52,rf=Math.round(Math.max(fs*0.6,S*0.024)),blockH=lines.length*lh+rf*2.4,bottom=H-S*0.075,top=bottom-blockH;
-  const g0=Math.max(0,top-S*0.22),g=x.createLinearGradient(0,g0,0,H);g.addColorStop(0,'rgba(12,16,26,0)');g.addColorStop(0.35,'rgba(12,16,26,.55)');g.addColorStop(1,'rgba(12,16,26,.86)');x.fillStyle=g;x.fillRect(0,g0,W,H-g0);
-  x.textAlign='center';x.textBaseline='alphabetic';x.shadowColor='rgba(0,0,0,.6)';x.shadowBlur=fs*0.4;x.fillStyle='#fffaf0';
-  lines.forEach((l,k)=>x.fillText(l,W/2,top+fs+k*lh));
-  x.shadowBlur=rf*0.3;x.font=`400 ${rf}px "Gowun Batang", serif`;x.fillStyle='#f0d39a';x.fillText(it.ref+' · 개역개정',W/2,top+lines.length*lh+rf*1.7)}
- const blob=await new Promise(res=>c.toBlob(res,'image/jpeg',0.92));
- if(st.url)URL.revokeObjectURL(st.url);st.card=blob;st.url=URL.createObjectURL(blob)}
+async function buildCard(i){const st=store.get(i);if(!st?.raw)return;if(st.url)URL.revokeObjectURL(st.url);st.card=st.raw;st.url=URL.createObjectURL(st.raw)}
 async function drawOne(i,signal,newSeed){const it=post.images[i];if(newSeed)it.seed=Math.floor(Math.random()*1e7);it.status='busy';it.err='';updateFig(i);
  try{const {blob,link}=await fetchImage(fullPrompt(it.prompt),it.seed,signal);store.set(i,{raw:blob});it.link=link;await buildCard(i);it.status='ok'}
  catch(e){it.status='err';it.err=e.name==='AbortError'?'중단됐어요':e.message;updateFig(i);if(e.name==='AbortError'||e.status===401||e.status===402)throw e;return false}
@@ -554,8 +545,9 @@ async function copyRich(){try{const html=articleHTML(),text=articleText();
  else{await navigator.clipboard.writeText(text);toast('텍스트로 복사했어요.')}}catch(e){fallbackCopy(articleText())}}
 async function copyText(){try{await navigator.clipboard.writeText(articleText());toast('텍스트로 복사했어요. [사진 N] 자리에 사진을 넣어 주세요.')}catch(e){fallbackCopy(articleText())}}
 function fallbackCopy(t){const ta=document.createElement('textarea');ta.value=t;ta.style.cssText='position:fixed;opacity:0';document.body.append(ta);ta.select();try{document.execCommand('copy');toast('복사했어요.')}catch(e){toast('복사하지 못했어요. 글을 길게 눌러 직접 복사해 주세요.')}ta.remove()}
+const extOf=b=>/png/.test(b?.type||'')?'png':/webp/.test(b?.type||'')?'webp':'jpg';
 const fileBase=()=>(post.label||'말씀').replace(/[\\/:*?"<>|\s]+/g,'_');
-function imgFiles(){const out=[];post.images.forEach((it,i)=>{const st=store.get(i);if(it.status==='ok'&&st?.card)out.push({name:`${String(i+1).padStart(2,'0')}_${fileBase()}.jpg`,blob:st.card,raw:st.raw})});return out}
+function imgFiles(){const out=[];post.images.forEach((it,i)=>{const st=store.get(i);if(it.status==='ok'&&st?.card)out.push({name:`${String(i+1).padStart(2,'0')}_${fileBase()}.${extOf(st.card)}`,blob:st.card})});return out}
 const CRC=(()=>{const t=new Uint32Array(256);for(let n=0;n<256;n++){let c=n;for(let k=0;k<8;k++)c=c&1?0xEDB88320^(c>>>1):c>>>1;t[n]=c>>>0}return t})();
 function crc32(u){let c=0xFFFFFFFF;for(let i=0;i<u.length;i++)c=CRC[(c^u[i])&255]^(c>>>8);return(c^0xFFFFFFFF)>>>0}
 async function makeZip(files){const enc=new TextEncoder(),parts=[],cen=[];let off=0;const d=new Date();
@@ -568,11 +560,11 @@ async function makeZip(files){const enc=new TextEncoder(),parts=[],cen=[];let of
  const cs=cen.reduce((a,b)=>a+b.byteLength,0);const e=new DataView(new ArrayBuffer(22));e.setUint32(0,0x06054b50,true);e.setUint16(8,files.length,true);e.setUint16(10,files.length,true);e.setUint32(12,cs,true);e.setUint32(16,off,true);
  return new Blob([...parts,...cen,e.buffer],{type:'application/zip'})}
 async function saveZip(){const imgs=imgFiles();if(!imgs.length){toast('저장할 사진이 아직 없어요.');return}
- const files=imgs.map(f=>({name:f.name,data:f.blob}));if(post.opts.overlay)imgs.forEach(f=>files.push({name:'원본(글씨없음)/'+f.name,data:f.raw}));
+ const files=imgs.map(f=>({name:f.name,data:f.blob}));
  files.push({name:'블로그글_'+fileBase()+'.txt',data:new TextEncoder().encode(articleText())});
  download(await makeZip(files),`말씀블로그_${fileBase()}.zip`);toast('사진과 글을 한 파일(ZIP)로 저장했어요.')}
 async function sharePhotos(){const imgs=imgFiles();if(!imgs.length){toast('보낼 사진이 아직 없어요.');return}
- const files=imgs.map(f=>new File([f.blob],f.name,{type:'image/jpeg'}));
+ const files=imgs.map(f=>new File([f.blob],f.name,{type:f.blob.type||'image/jpeg'}));
  try{await navigator.share({files,title:post.label})}catch(e){if(e.name!=='AbortError')toast('이 기기에서는 사진 보내기를 지원하지 않아요. ZIP 저장을 이용해 주세요.')}}
 
 /* ========== 보관함 ========== */
@@ -586,7 +578,7 @@ function libUI(){const a=libRead();$('#libList').innerHTML=a.length?a.map(p=>`<l
 async function openPost(id){const p=libRead().find(x=>x.id===id);if(!p)return;
  store.forEach(s=>s.url&&URL.revokeObjectURL(s.url));store.clear();post=p;post.krvAll=[];
  post.images.forEach(it=>it.status=it.link?'loading':'wait');
- $('#result').hidden=false;$('#progress').hidden=true;$('#overlayToggle').checked=post.opts.overlay;
+ $('#result').hidden=false;$('#progress').hidden=true;
  if(p.html)restoreArticle(p.html);else renderArticle();$('#libDlg').close();$('#result').scrollIntoView({behavior:'smooth'});
  await Promise.all(post.images.map(async(it,i)=>{if(!it.link)return;try{const r=await fetch(it.link);if(!r.ok)throw 0;const b=await r.blob();if(!b.type.startsWith('image/')&&b.size<2000)throw 0;store.set(i,{raw:b});await buildCard(i);it.status='ok'}catch(e){it.status='expired'}updateFig(i)}))}
 
@@ -610,7 +602,7 @@ async function run(){
   post.ai=await writePost(P,opts,sg);
   status('사진에 붙일 말씀을 고르고 있어요…');await resolveRefs(sg);
   step(1,'done','글 완성');
-  $('#result').hidden=false;$('#overlayToggle').checked=post.opts.overlay;renderArticle();saveCurrent();
+  $('#result').hidden=false;renderArticle();saveCurrent();
   cur=2;step(2,'run','0/5장');
   const fails=await drawAll(sg);
   step(2,fails?'fail':'done',fails?`${5-fails}/5장 · 실패한 사진은 ‘다시 그리기’`:'5/5장 완료');
@@ -623,7 +615,7 @@ async function run(){
 $('#refForm').addEventListener('submit',e=>{e.preventDefault();run()});
 $('#examples').innerHTML=EXAMPLES.map(x=>`<button type="button">${x}</button>`).join('');
 $('#examples').addEventListener('click',e=>{const b=e.target.closest('button');if(b){$('#refInput').value=b.textContent;$('#refInput').focus()}});
-['#oTone','#oReader','#oLength','#oWriter','#oLook','#oSize','#oOverlay'].forEach(s=>$(s).addEventListener('change',readOpts));
+['#oTone','#oReader','#oLength','#oWriter','#oLook','#oSize'].forEach(s=>$(s).addEventListener('change',readOpts));
 $('#stopBtn').onclick=()=>abortCtl?.abort();
 $('#connBtn').onclick=()=>{openAuth();if(token)readBalance()};
 $('#authStart').onclick=startDevice;
@@ -636,10 +628,9 @@ $('#libList').addEventListener('click',e=>{const o=e.target.closest('[data-open]
  if(d&&confirm('이 글을 보관함에서 지울까요?')){libWrite(libRead().filter(x=>x.id!==d.dataset.del));libUI()}});
 $('#titles').addEventListener('click',e=>{const b=e.target.closest('[data-t]');if(!b)return;post.titleIdx=+b.dataset.t;const h=$('#post h1');if(h)h.textContent=post.ai.titles[post.titleIdx];renderTitles();saveCurrent()});
 $('#post').addEventListener('click',async e=>{const b=e.target.closest('[data-act]');if(!b)return;e.preventDefault();const i=+b.dataset.i;
- if(b.dataset.act==='save'){const st=store.get(i);if(!st?.card){toast('아직 사진이 없어요.');return}download(st.card,`${String(i+1).padStart(2,'0')}_${fileBase()}.jpg`);return}
+ if(b.dataset.act==='save'){const st=store.get(i);if(!st?.card){toast('아직 사진이 없어요.');return}download(st.card,`${String(i+1).padStart(2,'0')}_${fileBase()}.${extOf(st.card)}`);return}
  if(b.dataset.act==='redo'){if(!token){openAuth();return}if(post.images[i].status==='busy')return;b.disabled=true;try{await drawOne(i,undefined,true)}catch(err){toast(err.message)}b.disabled=false;readBalance()}});
 $('#post').addEventListener('input',()=>{clearTimeout(editT);editT=setTimeout(saveCurrent,800)});
-$('#overlayToggle').addEventListener('change',async e=>{if(!post)return;post.opts.overlay=e.target.checked;await rebuildCards();saveCurrent()});
 $$('[data-cmd]').forEach(b=>b.addEventListener('click',()=>{const c=b.dataset.cmd;
  if(c==='copyRich')copyRich();else if(c==='copyText')copyText();else if(c==='zip')saveZip();else if(c==='share')sharePhotos();
  else if(c==='new'){window.scrollTo({top:0,behavior:'smooth'});$('#refInput').select()}}));
