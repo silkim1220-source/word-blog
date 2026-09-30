@@ -468,7 +468,7 @@ async function resolveRefs(signal){
   P.images.push({ref:r?.label||'',verseText:r?.text||'',caption:im.caption,prompt:im.prompt,seed:seed+i*101,status:'wait',link:''})}}
 
 /* ========== 이미지 ========== */
-function fullPrompt(p){const L=LOOKS[post.opts.look].en;return L+'. '+p+'. '+L.split(',').slice(0,2).join(',')+'.'+SAFE_TAIL}
+function fullPrompt(p){p=String(p).replace(/\bno (modern|city|power|utility|skyscraper|high-rise|building|car|street|electric)[^,.]*[,.]?/gi,'').replace(/\bno (text|logos?|letters|words)[^,.]*[,.]?/gi,'').replace(/\s{2,}/g,' ');const L=LOOKS[post.opts.look].en;return L+'. '+p+'. '+L.split(',').slice(0,2).join(',')+'.'+SAFE_TAIL}
 async function fetchImage(prompt,seed,signal){const S=SIZES[post.opts.size];
  const url=API+'/image/'+encodeURIComponent(prompt.slice(0,1800))+'?'+new URLSearchParams({model:IMG_MODEL,width:S.w,height:S.h,seed:String(seed),nologo:'true'});
  const r=await fetch(url,{headers:{Authorization:'Bearer '+token},signal});const type=r.headers.get('content-type')||'';
